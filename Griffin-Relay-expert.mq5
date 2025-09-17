@@ -66,24 +66,37 @@ void OnTimer()
 }
 
 //+------------------------------------------------------------------+
-//| پردازش سیگنال‌های دریافتی (بازنویسی شده با توابع کمکی)           |
+//| پردازش سیگنال‌های دریافتی (نسخه اصلاح شده و قابل اطمینان)           |
 //+------------------------------------------------------------------+
 void ProcessSignals(string response)
 {
    // حذف براکت‌های ابتدا و انتهای آرایه JSON
    StringTrimLeft(response);
    StringTrimRight(response);
+
+   // اگر پاسخ خالی یا یک آرایه خالی بود، خارج شو
+   if(response == "[]" || response == "") return;
+
+   // حذف براکت‌های ابتدا و انتها برای دسترسی به محتوای آرایه
    response = StringSubstr(response, 1, StringLen(response) - 2);
 
-   // جدا کردن سیگنال‌های مختلف از هم
-   string signals_array[];
-   StringSplit(response, ',', signals_array);
-
-   // پیمایش در سیگنال‌ها
-   for(int i = 0; i < ArraySize(signals_array); i++)
+   // حلقه برای پردازش تمام سیگنال‌های داخل آرایه
+   while(StringLen(response) > 0)
    {
-      string signal_json = signals_array[i];
-      
+      int start_pos = StringFind(response, "{");
+      int end_pos = StringFind(response, "}");
+
+      // اگر آبجکت JSON معتبری پیدا نشد، از حلقه خارج شو
+      if(start_pos == -1 || end_pos == -1 || end_pos < start_pos)
+      {
+         break;
+      }
+
+      // استخراج یک سیگنال کامل به صورت یک آبجکت JSON
+      string signal_json = StringSubstr(response, start_pos, (end_pos - start_pos) + 1);
+
+      // --- بقیه کد پردازش سیگنال بدون تغییر باقی می‌ماند ---
+
       // استخراج داده‌های هر سیگنال با توابع کمکی
       string signal_action     = GetJsonString(signal_json, "action");
       ulong  signal_ticket     = GetJsonUlong(signal_json, "provider_ticket");
@@ -93,35 +106,41 @@ void ProcessSignals(string response)
       double signal_sl         = GetJsonDouble(signal_json, "sl");
       double signal_tp         = GetJsonDouble(signal_json, "tp");
 
+      // --- این شرط اکنون به درستی کار خواهد کرد ---
       if(signal_symbol != _Symbol)
       {
          Print("Signal for ", signal_symbol, " ignored. EA is running on ", _Symbol);
-         continue;
+      }
+      else
+      {
+         if(signal_action == "PLACE_PENDING" || signal_action == "OPEN_POSITION")
+         {
+            double lot_size = CalculateLotSizeByRisk(signal_price, signal_sl);
+            if(lot_size <= 0)
+            {
+               Print("Could not execute trade. Invalid lot size calculated: ", lot_size);
+            }
+            else
+            {
+               if(signal_action == "PLACE_PENDING")
+                  trade.OrderOpen(signal_symbol, (ENUM_ORDER_TYPE)signal_order_type, lot_size, 0, signal_price, signal_sl, signal_tp);
+               else // OPEN_POSITION
+               {
+                  if((ENUM_POSITION_TYPE)signal_order_type == POSITION_TYPE_BUY)
+                     trade.Buy(lot_size, signal_symbol, 0, signal_sl, signal_tp);
+                  else
+                     trade.Sell(lot_size, signal_symbol, 0, signal_sl, signal_tp);
+               }
+            }
+         }
+         else if(signal_action == "CLOSE_POSITION")
+         {
+            trade.PositionClose(signal_ticket);
+         }
       }
 
-      if(signal_action == "PLACE_PENDING" || signal_action == "OPEN_POSITION")
-      {
-         double lot_size = CalculateLotSizeByRisk(signal_price, signal_sl);
-         if(lot_size <= 0)
-         {
-            Print("Could not execute trade. Invalid lot size calculated: ", lot_size);
-            continue;
-         }
-         
-         if(signal_action == "PLACE_PENDING")
-            trade.OrderOpen(signal_symbol, (ENUM_ORDER_TYPE)signal_order_type, lot_size, 0, signal_price, signal_sl, signal_tp);
-         else // OPEN_POSITION
-         {
-            if((ENUM_POSITION_TYPE)signal_order_type == POSITION_TYPE_BUY)
-               trade.Buy(lot_size, signal_symbol, 0, signal_sl, signal_tp);
-            else
-               trade.Sell(lot_size, signal_symbol, 0, signal_sl, signal_tp);
-         }
-      }
-      else if(signal_action == "CLOSE_POSITION")
-      {
-         trade.PositionClose(signal_ticket);
-      }
+      // بخشی از رشته که پردازش شده را حذف کن تا به سیگنال بعدی برویم
+      response = StringSubstr(response, end_pos + 1);
    }
 }
 
