@@ -10,7 +10,7 @@
 #include <Trade\Trade.mqh>
 
 // --- ورودی‌های اکسپرت
-input string InpServerURL      = "http://localhost:5002/get-signals"; // آدرس سرور HTTP
+input string InpServerURL      = "http://127.0.0.1:5002/get-signals"; // آدرس سرور HTTP
 input double InpRiskPercent    = 1.0;                                 // درصد ریسک برای هر معامله
 input ulong  InpMagicNumber    = 17560;                                 // مجیک نامبر
 input int    InpPollingInterval = 5;                                   // فاصله زمانی درخواست‌ها (به ثانیه)
