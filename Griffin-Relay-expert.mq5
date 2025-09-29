@@ -19,6 +19,13 @@ input int    InpPollingInterval = 5;                                   // فاص
 CTrade trade;
 // کتابخانه JAson حذف شد
 
+
+
+// --- متغیرهای سراسری
+
+ulong g_master_tickets[]; // برای ذخیره تیکت‌های حساب Master
+ulong g_slave_tickets[];  // برای ذخیره تیکت‌های معادل در حساب Slave
+
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |
 //+------------------------------------------------------------------+
@@ -68,81 +75,124 @@ void OnTimer()
 //+------------------------------------------------------------------+
 //| پردازش سیگنال‌های دریافتی (نسخه اصلاح شده و قابل اطمینان)           |
 //+------------------------------------------------------------------+
+
 void ProcessSignals(string response)
 {
-   // حذف براکت‌های ابتدا و انتهای آرایه JSON
-   StringTrimLeft(response);
-   StringTrimRight(response);
+    StringTrimLeft(response);
+    StringTrimRight(response);
+    if(response == "[]" || response == "") return;
+    response = StringSubstr(response, 1, StringLen(response) - 2);
 
-   // اگر پاسخ خالی یا یک آرایه خالی بود، خارج شو
-   if(response == "[]" || response == "") return;
+    while(StringLen(response) > 0)
+    {
+        int start_pos = StringFind(response, "{");
+        int end_pos = StringFind(response, "}");
+        if(start_pos == -1 || end_pos == -1 || end_pos < start_pos)
+        {
+            break;
+        }
+        string signal_json = StringSubstr(response, start_pos, (end_pos - start_pos) + 1);
 
-   // حذف براکت‌های ابتدا و انتها برای دسترسی به محتوای آرایه
-   response = StringSubstr(response, 1, StringLen(response) - 2);
+        string signal_action     = GetJsonString(signal_json, "action");
+        ulong  signal_ticket     = GetJsonUlong(signal_json, "provider_ticket");
+        string signal_symbol     = GetJsonString(signal_json, "symbol");
+        int    signal_order_type = (int)GetJsonUlong(signal_json, "order_type");
+        double signal_price      = GetJsonDouble(signal_json, "price");
+        double signal_sl         = GetJsonDouble(signal_json, "sl");
+        double signal_tp         = GetJsonDouble(signal_json, "tp");
 
-   // حلقه برای پردازش تمام سیگنال‌های داخل آرایه
-   while(StringLen(response) > 0)
-   {
-      int start_pos = StringFind(response, "{");
-      int end_pos = StringFind(response, "}");
-
-      // اگر آبجکت JSON معتبری پیدا نشد، از حلقه خارج شو
-      if(start_pos == -1 || end_pos == -1 || end_pos < start_pos)
-      {
-         break;
-      }
-
-      // استخراج یک سیگنال کامل به صورت یک آبجکت JSON
-      string signal_json = StringSubstr(response, start_pos, (end_pos - start_pos) + 1);
-
-      // --- بقیه کد پردازش سیگنال بدون تغییر باقی می‌ماند ---
-
-      // استخراج داده‌های هر سیگنال با توابع کمکی
-      string signal_action     = GetJsonString(signal_json, "action");
-      ulong  signal_ticket     = GetJsonUlong(signal_json, "provider_ticket");
-      string signal_symbol     = GetJsonString(signal_json, "symbol");
-      int    signal_order_type = (int)GetJsonUlong(signal_json, "order_type");
-      double signal_price      = GetJsonDouble(signal_json, "price");
-      double signal_sl         = GetJsonDouble(signal_json, "sl");
-      double signal_tp         = GetJsonDouble(signal_json, "tp");
-
-      // --- این شرط اکنون به درستی کار خواهد کرد ---
-      if(signal_symbol != _Symbol)
-      {
-         Print("Signal for ", signal_symbol, " ignored. EA is running on ", _Symbol);
-      }
-      else
-      {
-         if(signal_action == "PLACE_PENDING" || signal_action == "OPEN_POSITION")
-         {
-            double lot_size = CalculateLotSizeByRisk(signal_price, signal_sl);
-            if(lot_size <= 0)
+        if(signal_symbol != _Symbol)
+        {
+            Print("Signal for ", signal_symbol, " ignored. EA is running on ", _Symbol);
+        }
+        else
+        {
+            if(signal_action == "PLACE_PENDING" || signal_action == "OPEN_POSITION")
             {
-               Print("Could not execute trade. Invalid lot size calculated: ", lot_size);
-            }
-            else
-            {
-               if(signal_action == "PLACE_PENDING")
-                  trade.OrderOpen(signal_symbol, (ENUM_ORDER_TYPE)signal_order_type, lot_size, 0, signal_price, signal_sl, signal_tp);
-               else // OPEN_POSITION
-               {
-                  if((ENUM_POSITION_TYPE)signal_order_type == POSITION_TYPE_BUY)
-                     trade.Buy(lot_size, signal_symbol, 0, signal_sl, signal_tp);
-                  else
-                     trade.Sell(lot_size, signal_symbol, 0, signal_sl, signal_tp);
-               }
-            }
-         }
-         else if(signal_action == "CLOSE_POSITION")
-         {
-            trade.PositionClose(signal_ticket);
-         }
-      }
+                double lot_size = CalculateLotSizeByRisk(signal_price, signal_sl);
+                if(lot_size <= 0)
+                {
+                   Print("Could not execute trade for master ticket ", signal_ticket, ". Invalid lot size.");
+                }
+                else
+                {
+                   bool success = false;
+                   if(signal_action == "PLACE_PENDING")
+                   {
+                      success = trade.OrderOpen(signal_symbol, (ENUM_ORDER_TYPE)signal_order_type, lot_size, 0, signal_price, signal_sl, signal_tp, ORDER_TIME_GTC, 0, "");
+                   }
+                   else // OPEN_POSITION
+                   {
+                      if((ENUM_POSITION_TYPE)signal_order_type == POSITION_TYPE_BUY)
+                         success = trade.Buy(lot_size, signal_symbol, 0, signal_sl, signal_tp);
+                      else
+                         success = trade.Sell(lot_size, signal_symbol, 0, signal_sl, signal_tp);
+                   }
 
-      // بخشی از رشته که پردازش شده را حذف کن تا به سیگنال بعدی برویم
-      response = StringSubstr(response, end_pos + 1);
-   }
+                   if(success)
+                   {
+                       ulong new_slave_ticket = 0;
+                       
+                       if(signal_action == "PLACE_PENDING")
+                       {
+                           // برای سفارشات معلق، همان تیکت سفارش درست است
+                           new_slave_ticket = trade.ResultOrder();
+                       }
+                       else // OPEN_POSITION
+                       {
+                           // ۱. ابتدا تیکت Deal (رسید) را می‌گیریم
+                           ulong deal_ticket = trade.ResultDeal();
+                           
+                           // ۲. از طریق تیکت Deal، به تیکت اصلی پوزیشن دست پیدا می‌کنیم
+                           if(HistoryDealSelect(deal_ticket))
+                           {
+                               new_slave_ticket = HistoryDealGetInteger(deal_ticket, DEAL_POSITION_ID);
+                           }
+                       }
+                   
+                       if(new_slave_ticket > 0)
+                       {
+                           int size = ArraySize(g_master_tickets);
+                           ArrayResize(g_master_tickets, size + 1);
+                           ArrayResize(g_slave_tickets, size + 1);
+                           g_master_tickets[size] = signal_ticket;
+                           g_slave_tickets[size] = new_slave_ticket;
+                           Print("MAP ADDED: Master Ticket ", signal_ticket, " ==> Slave Ticket ", new_slave_ticket, " (Type: ", (signal_action == "PLACE_PENDING" ? "Order" : "Position"), ")");
+                       }
+                       else
+                       {
+                           Print("Trade executed but could not fetch slave ticket. Retcode: ", trade.ResultRetcode());
+                       }
+                   }
+               
+                  }
+            }
+            else if(signal_action == "CLOSE_POSITION")
+            {
+                ulong slave_ticket_to_close = FindSlaveTicketByMasterTicket(signal_ticket);
+                if(slave_ticket_to_close > 0)
+                {
+                    if(PositionSelectByTicket(slave_ticket_to_close))
+                    {
+                        trade.PositionClose(slave_ticket_to_close);
+                        Print("Closing position for master ticket ", signal_ticket, " (slave ticket: ", slave_ticket_to_close, ")");
+                    }
+                    else if(OrderSelect(slave_ticket_to_close))
+                    {
+                        trade.OrderDelete(slave_ticket_to_close);
+                        Print("Deleting pending order for master ticket ", signal_ticket, " (slave ticket: ", slave_ticket_to_close, ")");
+                    }
+                }
+                else
+                {
+                    Print("CLOSE IGNORED: Could not find a matching slave ticket for master ticket ", signal_ticket);
+                }
+            }
+        }
+        response = StringSubstr(response, end_pos + 1);
+    }
 }
+
 
 //+------------------------------------------------------------------+
 //| محاسبه حجم لات بر اساس درصد ریسک                                  |
@@ -174,6 +224,34 @@ double CalculateLotSizeByRisk(double entry_price, double sl_price)
 
    Print("Lot size calculated: ", lot_size, " for risk ", InpRiskPercent, "%");
    return NormalizeDouble(lot_size, 2);
+}
+
+
+// +++  تابع برای پیدا کردن تیکت معادل در حساب Slave +++
+ulong FindSlaveTicketByMasterTicket(ulong master_ticket)
+{
+    // حلقه برای جستجو در آرایه تیکت‌های مستر
+    for(int i = 0; i < ArraySize(g_master_tickets); i++)
+    {
+        // اگر تیکت مستر پیدا شد
+        if(g_master_tickets[i] == master_ticket)
+        {
+            ulong slave_ticket = g_slave_tickets[i];
+            // بررسی می‌کنیم که آیا پوزیشن مربوط به این تیکت هنوز باز است یا خیر
+            if(PositionSelectByTicket(slave_ticket))
+            {
+                // اگر باز بود، تیکت اسلیو را برمی‌گردانیم
+                return slave_ticket;
+            }
+            // اگر یک سفارش پندینگ بود، آن را بررسی می‌کنیم
+            else if(OrderSelect(slave_ticket))
+            {
+                 return slave_ticket;
+            }
+        }
+    }
+    // اگر هیچ تیکت معادلی پیدا نشد، صفر برمی‌گردانیم
+    return 0;
 }
 
 //+------------------------------------------------------------------+
