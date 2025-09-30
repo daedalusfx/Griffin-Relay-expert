@@ -109,6 +109,14 @@ void ProcessSignals(string response)
         {
             if(signal_action == "PLACE_PENDING" || signal_action == "OPEN_POSITION")
             {
+                                // بررسی می‌کنیم که آیا برای این تیکت مستر، از قبل معامله‌ای باز یا در حال انتظار داریم؟
+                if(FindSlaveTicketByMasterTicket(signal_ticket) > 0)
+                {
+                    Print("DUPLICATE IGNORED: A trade for master ticket ", signal_ticket, " already exists. Skipping.");
+                    // به سراغ سیگنال بعدی در رشته JSON می‌رویم
+                    response = StringSubstr(response, end_pos + 1);
+                    continue; // حلقه while را به تکرار بعدی می‌برد
+                }
                 double lot_size = CalculateLotSizeByRisk(signal_price, signal_sl);
                 if(lot_size <= 0)
                 {
