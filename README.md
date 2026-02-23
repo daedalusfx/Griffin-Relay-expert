@@ -1,68 +1,67 @@
-# Griffin-Relay-expert 🤖
 
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-[![Platform](https://img.shields.io/badge/Platform-MetaTrader_5-0053A6)](https://www.metatrader5.com)
+# Griffin Relay - HFT Copy Trading Receiver for MT5 🦅
 
-A "slave" Expert Advisor for MetaTrader 5 that connects to the `Griffin-Relay-server`. It fetches trade signals via HTTP polling and executes them on a trading account with automated risk-based lot sizing.
+![Platform](https://img.shields.io/badge/Platform-MetaTrader%205-0078D7.svg?style=for-the-badge&logo=metatrader5&logoColor=white)
+![Language](https://img.shields.io/badge/Language-MQL5-E5962D.svg?style=for-the-badge)
+![Latency](https://img.shields.io/badge/Latency-<20ms-success.svg?style=for-the-badge)
 
-This EA is designed to be lightweight, efficient, and easy to set up, with no external library dependencies.
+**Griffin Relay** is an institutional-grade, ultra-fast Trade Copier (Slave) Expert Advisor for MetaTrader 5. 
 
----
+Unlike traditional copy copiers that rely on slow HTTP `WebRequest` polling, Griffin Relay utilizes a **custom C++ WebSocket DLL (`GriffinLensClient`)** to receive and execute trade signals in real-time. It completely eliminates network overhead, making it capable of High-Frequency Trading (HFT) execution.
 
-## ✨ Features
+## 🔥 Core Features
 
--   **HTTP Polling:** Uses the native MQL5 `WebRequest` function to periodically fetch signals, eliminating the need for complex WebSocket libraries or DLLs.
--   **Zero Dependencies:** Fully self-contained. It does **not** require any third-party `.mqh` libraries (like JAson.mqh) for its core functionality.
--   **Risk-Based Lot Sizing:** Automatically calculates the trade volume based on a user-defined risk percentage (`InpRiskPercent`) and the signal's stop-loss level.
--   **Batch Signal Processing:** Capable of processing an entire array of trade signals received in a single HTTP response.
--   **Symbol Filtering:** Protects against incorrect trades by only executing signals that match the symbol of the chart it's running on.
--   **Customizable Settings:** Easily configure the server URL, risk, and magic number via the EA's input parameters.
+* **Sub-Millisecond Execution:** Uses a `20ms` millisecond timer to read the DLL command queue, ensuring instant trade mirroring.
+* **Dynamic Risk Management:** Automatically calculates the exact lot size based on your specific Risk Percentage (%) and the Master's Stop Loss distance.
+* **Full Order Support:** Seamlessly handles Market Orders (`BUY`/`SELL`), Pending Orders (`LIMIT`/`STOP`), and instant closures (`CANCEL`/`CLOSE`).
+* **Smart Ticket Mapping:** Internally maps Master Tickets to Slave Tickets to prevent duplicate trades and ensure accurate position closures.
 
----
+## ⚙️ Installation
 
-## 🛠️ Installation & Setup
+1. **The DLL:** Download or compile the `libGriffinLensClient.dll` (from the GriffinLensClient repo) and place it in your MT5 Libraries folder:
+   `C:\Users\...\AppData\Roaming\MetaQuotes\Terminal\...\MQL5\Libraries\GriffinLensClient\`
+2. **The EA:** Place `Griffin-Relay-expert.mq5` into your MT5 Experts folder:
+   `...\MQL5\Experts\`
+3. **Compile:** Open MetaEditor, open the EA, and hit **F7** to compile.
+4. **MT5 Settings:** Go to `Tools -> Options -> Expert Advisors` and check **"Allow DLL imports"**.
 
-This EA requires the `Griffin-Relay-server` to be running.
+## 🚀 How It Works
 
-### Step 1: Download & Compile the EA
+1. A central Node.js WebSocket Router broadcasts a JSON trade signal on port `5151`.
+2. The `GriffinLensClient.dll` captures the WebSocket payload instantly.
+3. The `Griffin Relay EA` reads the DLL buffer, parses the JSON, calculates the required lot size based on your account balance, and executes the trade.
 
-1.  Download the `SignalReceiverHttp.mq5` file from this repository.
-2.  Open MetaTrader 5.
-3.  Go to `File` -> `Open Data Folder`.
-4.  Navigate to the `MQL5\Experts` directory.
-5.  Place the downloaded `.mq5` file here.
-6.  Return to MetaTrader 5, open the "Navigator" window, right-click on "Expert Advisors", and select "Refresh".
-7.  The `SignalReceiverHttp` EA should now appear. Double-click it to open it in MetaEditor and click "Compile". It should compile without any errors.
+### JSON Signal Structure Example:
+```json
+{
+  "type": "trade_signal",
+  "action": "OPEN_POSITION",
+  "provider_ticket": 12345678,
+  "symbol": "XAUUSD",
+  "order_type": 0,
+  "price": 2045.50,
+  "sl": 2040.00,
+  "tp": 2060.00
+}
 
-### Step 2: IMPORTANT - Allow WebRequest in MetaTrader 5
+```
 
-For the EA to communicate with the server, you **must** enable `WebRequest` in the MT5 options.
+## 🎛️ Input Parameters
 
-1.  In MetaTrader 5, go to `Tools` -> `Options`.
-2.  Select the **"Expert Advisors"** tab.
-3.  Check the box that says **"Allow WebRequest for listed URL"**.
-4.  Click the "Add new URL" button and enter the address of your server: `http://localhost:5002`
-5.  Click "OK" to save the settings.
+* **Copy Trading Settings:**
+* `Risk Percent`: The exact percentage of your account balance to risk per trade (e.g., `1.0` = 1%).
+* `Magic Number`: Unique identifier for trades opened by this EA.
 
 
+* **System Settings:**
+* `Timer Ms`: The scanning frequency of the DLL queue. Default is `20ms` for lightning-fast execution.
 
----
 
-## 🚀 Usage
 
-1.  Ensure the `Griffin-Relay-server` is running.
-2.  In MetaTrader 5, drag the `SignalReceiverHttp` EA from the Navigator onto the chart of the symbol you want to trade (e.g., EURUSD).
-3.  In the "Inputs" tab, configure the parameters:
-    -   **`InpServerURL`**: Should match the server address (`http://localhost:5002/get-signals`).
-    -   **`InpRiskPercent`**: The percentage of your account balance to risk per trade (e.g., `1.0` for 1%).
-    -   **`InpMagicNumber`**: A unique number to identify trades opened by this EA.
-4.  Click "OK".
-5.  Make sure the **"Algo Trading"** button in your MetaTrader 5 toolbar is enabled (green).
+## ⚠️ Disclaimer
 
-The EA will now poll the server every 5 seconds (by default) for new signals and execute them automatically.
+Trading in financial markets involves high risk. This open-source tool is provided "AS IS" for educational purposes. Always test algorithms extensively on Demo accounts before deploying real capital.
 
----
+## 📄 License
 
-## 📜 License
-
-This project is open-source and licensed under the **GNU General Public License v3.0**. See the [LICENSE](LICENSE) file for details.
+Licensed under the [GPL v3.0 License](https://www.google.com/search?q=LICENSE).
