@@ -9,6 +9,13 @@
 
 Unlike traditional copy copiers that rely on slow HTTP `WebRequest` polling, Griffin Relay utilizes a **custom C++ WebSocket DLL (`GriffinLensClient`)** to receive and execute trade signals in real-time. It completely eliminates network overhead, making it capable of High-Frequency Trading (HFT) execution.
 
+
+
+![Workflow](./assets/griffin_copy_trade.drawio.png)
+
+
+
+
 ## 🔥 Core Features
 
 * **Sub-Millisecond Execution:** Uses a `20ms` millisecond timer to read the DLL command queue, ensuring instant trade mirroring.
