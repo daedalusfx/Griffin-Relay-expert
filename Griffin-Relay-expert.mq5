@@ -4,29 +4,33 @@
 //+------------------------------------------------------------------+
 #property copyright "Griffin Quant"
 #property link      "https://github.com/daedalusfx"
-#property version   "3.00"
+#property version   "3.10"
 
 #include <Trade\Trade.mqh>
 
-// --- ایمپورت توابع DLL (مربوط به اکسپرت Slave) ---
+// --- ایمپورت توابع DLL ---
 #import "GriffinLensClient\\libGriffinLensClient.dll"
-   void InitializeService();
+
+void InitializeService(const string token);
    void FinalizeService();
    int  GetNextCommand(uchar& buffer[], int buffer_size);
 #import
 
 // --- ورودی‌های اکسپرت ---
+input group "Authentication"
+input string InpSignalToken    = "PRV-XXXXX"; // توکن دریافتی از سایت
+
 input group "Copy Trading Settings"
-input double InpRiskPercent    = 1.0;     // درصد ریسک برای هر معامله
-input ulong  InpMagicNumber    = 17560;   // مجیک نامبر اکسپرت اسلیو
+input double InpRiskPercent    = 1.0;     
+input ulong  InpMagicNumber    = 17560;   
 
 input group "System Settings"
-input int    InpTimerMs        = 20;      // سرعت اسکن سوکت (۲۰ میلی‌ثانیه برای HFT)
+input int    InpTimerMs        = 20;      
 
 // --- متغیرهای سراسری ---
 CTrade trade;
-ulong g_master_tickets[]; // برای ذخیره تیکت‌های حساب Master
-ulong g_slave_tickets[];  // برای ذخیره تیکت‌های معادل در حساب Slave
+ulong g_master_tickets[]; 
+ulong g_slave_tickets[];  
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -34,13 +38,16 @@ int OnInit()
    trade.SetExpertMagicNumber(InpMagicNumber);
    trade.SetMarginMode();
    
-   // راه‌اندازی DLL کلاینت
-   InitializeService();
-   
-   // تایمر HFT برای بررسی صف دستورات
+   if(InpSignalToken == "" || InpSignalToken == "PRV-XXXXX") {
+      Print("❌ لطفا توکن سیگنال را وارد کنید!");
+      return(INIT_FAILED);
+   }
+
+   // راه‌اندازی DLL و ارسال توکن
+   InitializeService(InpSignalToken);
    EventSetMillisecondTimer(InpTimerMs);
    
-   Print("🚀 Griffin Relay Initialized. Polling DLL every ", InpTimerMs, "ms.");
+   Print("🚀 Griffin Relay Initialized. Authenticating...");
    return(INIT_SUCCEEDED);
 }
 
@@ -55,21 +62,23 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTimer()
 {
-   uchar buffer[2048]; // بافر برای خواندن پیام از DLL
+   uchar buffer[4096]; 
    
    while(true)
    {
        ArrayInitialize(buffer, 0);
+       int len = GetNextCommand(buffer, 4096);
+       if(len <= 0) break; 
        
-       // دریافت دستور از DLL
-       int len = GetNextCommand(buffer, 2048);
-       
-       if(len <= 0) break; // صف خالی است
-       
-       // تبدیل بایت‌های دریافتی به استرینگ
        string msg = CharArrayToString(buffer, 0, len, CP_UTF8);
        
-       // پردازش سیگنال
+       // اگر پیام خطا از سمت DLL بود (مثلا توکن اشتباه است)
+       if(StringFind(msg, "AUTH_ERROR") >= 0) {
+           Print("❌ خطا در احراز هویت: ", msg);
+           ExpertRemove(); // حذف خودکار اکسپرت
+           return;
+       }
+       
        ProcessSingleSignal(msg);
    }
 }
