@@ -8,24 +8,33 @@
 
 #include <Trade\Trade.mqh>
 
+// --- تعریف یک منوی کشویی برای انتخاب نوع اتصال ---
+enum ENUM_CONNECTION_MODE {
+    MODE_LOCAL = 0, // Local Dashboard (Port 5151)
+    MODE_CLOUD = 1  // Cloud HFT Server (Port 8080)
+};
+
 // --- ایمپورت توابع DLL ---
 #import "TestRustDll\\griffin_slave_client.dll"
-
-   void InitializeService(uchar &token[]);
+   // تغییر ۱: اضافه شدن پارامتر url
+   void InitializeService(uchar &token[], uchar &url[]); 
    void FinalizeService();
    int  GetNextCommand(uchar& buffer[], int buffer_size);
 #import
 
+
 // --- ورودی‌های اکسپرت ---
-input group "Authentication"
-input string InpSignalToken    = "PRV-XXXXX"; // توکن دریافتی از سایت
+input group "Authentication & Connection"
+input string InpSignalToken    = "PRV-XXXXX"; // توکن سیگنال دریافتی
+input ENUM_CONNECTION_MODE InpConnMode = MODE_LOCAL; // نوع اتصال
+input string InpCloudUrl       = "ws://127.0.0.1:8080"; // آدرس سرور ابری (در صورت انتخاب کلود)
 
 input group "Copy Trading Settings"
 input double InpRiskPercent    = 1.0;     
 input ulong  InpMagicNumber    = 17560;   
 
 input group "System Settings"
-input int    InpTimerMs        = 20;      
+input int    InpTimerMs        = 20;
 
 // --- متغیرهای سراسری ---
 CTrade trade;
@@ -43,15 +52,21 @@ int OnInit()
       return(INIT_FAILED);
    }
 
-   // 💡 کدهای جدید: تبدیل استرینگ MQL5 به آرایه بایتی (UTF-8) قابل فهم برای Rust
+   // تغییر ۲: تعیین آدرس URL بر اساس انتخاب کاربر
+   string target_url = (InpConnMode == MODE_LOCAL) ? "ws://127.0.0.1:5151" : InpCloudUrl;
+
    uchar token_bytes[];
    StringToCharArray(InpSignalToken, token_bytes, 0, WHOLE_ARRAY, CP_UTF8);
+   
+   // تبدیل آدرس URL به آرایه بایتی برای ارسال به زنگ
+   uchar url_bytes[];
+   StringToCharArray(target_url, url_bytes, 0, WHOLE_ARRAY, CP_UTF8);
 
-   // راه‌اندازی DLL و ارسال توکن تبدیل شده
-   InitializeService(token_bytes);
+   // راه‌اندازی DLL و ارسال توکن و URL
+   InitializeService(token_bytes, url_bytes);
    EventSetMillisecondTimer(InpTimerMs);
    
-   Print("🚀 Griffin Relay Initialized. Authenticating...");
+   Print("🚀 Griffin Relay Initialized. Connecting to: ", target_url);
    return(INIT_SUCCEEDED);
 }
 //+------------------------------------------------------------------+
