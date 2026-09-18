@@ -16,12 +16,10 @@ enum ENUM_CONNECTION_MODE {
 
 // --- ایمپورت توابع DLL ---
 #import "TestRustDll\\griffin_slave_client.dll"
-   // تغییر ۱: اضافه شدن پارامتر url
    void InitializeService(uchar &token[], uchar &url[]); 
    void FinalizeService();
    int  GetNextCommand(uchar& buffer[], int buffer_size);
 #import
-
 
 // --- ورودی‌های اکسپرت ---
 input group "Authentication & Connection"
@@ -40,6 +38,32 @@ input int    InpTimerMs        = 20;
 CTrade trade;
 ulong g_master_tickets[]; 
 ulong g_slave_tickets[];  
+string g_token_filename = "Griffin_Relay_Token.txt"; // نام فایل کش
+
+//+------------------------------------------------------------------+
+//| توابع کمکی برای مدیریت کش توکن                                   |
+//+------------------------------------------------------------------+
+string LoadTokenCache() 
+{
+    if(FileIsExist(g_token_filename)) {
+        int handle = FileOpen(g_token_filename, FILE_READ|FILE_TXT|FILE_ANSI);
+        if(handle != INVALID_HANDLE) {
+            string cached_token = FileReadString(handle);
+            FileClose(handle);
+            return cached_token;
+        }
+    }
+    return "";
+}
+
+void SaveTokenCache(string token) 
+{
+    int handle = FileOpen(g_token_filename, FILE_WRITE|FILE_TXT|FILE_ANSI);
+    if(handle != INVALID_HANDLE) {
+        FileWriteString(handle, token);
+        FileClose(handle);
+    }
+}
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -47,28 +71,39 @@ int OnInit()
    trade.SetExpertMagicNumber(InpMagicNumber);
    trade.SetMarginMode();
    
-   if(InpSignalToken == "" || InpSignalToken == "PRV-XXXXX") {
-      Print("❌ لطفا توکن سیگنال را وارد کنید!");
-      return(INIT_FAILED);
+   string active_token = InpSignalToken;
+
+   // بررسی کش اگر توکن ورودی خالی یا پیش‌فرض باشد
+   if(active_token == "" || active_token == "PRV-XXXXX") {
+      active_token = LoadTokenCache();
+      if(active_token == "") {
+         Print("❌ توکنی در کش یافت نشد! لطفا توکن سیگنال را وارد کنید.");
+         return(INIT_FAILED);
+      } else {
+         Print("🔄 توکن با موفقیت از حافظه کش فراخوانی شد.");
+      }
+   } else {
+      // اگر کاربر توکن جدیدی وارد کرده باشد، آن را جایگزین و کش می‌کنیم
+      SaveTokenCache(active_token);
+      Print("💾 توکن جدید در حافظه کش ذخیره شد.");
    }
 
-   // تغییر ۲: تعیین آدرس URL بر اساس انتخاب کاربر
    string target_url = (InpConnMode == MODE_LOCAL) ? "ws://127.0.0.1:5151" : InpCloudUrl;
 
    uchar token_bytes[];
-   StringToCharArray(InpSignalToken, token_bytes, 0, WHOLE_ARRAY, CP_UTF8);
+   // مهم: اینجا به جای InpSignalToken از active_token استفاده می‌کنیم
+   StringToCharArray(active_token, token_bytes, 0, WHOLE_ARRAY, CP_UTF8);
    
-   // تبدیل آدرس URL به آرایه بایتی برای ارسال به زنگ
    uchar url_bytes[];
    StringToCharArray(target_url, url_bytes, 0, WHOLE_ARRAY, CP_UTF8);
 
-   // راه‌اندازی DLL و ارسال توکن و URL
    InitializeService(token_bytes, url_bytes);
    EventSetMillisecondTimer(InpTimerMs);
    
    Print("🚀 Griffin Relay Initialized. Connecting to: ", target_url);
    return(INIT_SUCCEEDED);
 }
+
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
@@ -90,23 +125,20 @@ void OnTimer()
        
        string msg = CharArrayToString(buffer, 0, len, CP_UTF8);
        
-       // ۱. بررسی خطاهای احراز هویت DLL و روتر Rust
        if(StringFind(msg, "AUTH_ERROR") >= 0 || StringFind(msg, "\"status\":\"error\"") >= 0) {
            string error_msg = GetJsonString(msg, "message");
            if(error_msg == "") error_msg = msg;
            
            Print("❌ خطا در احراز هویت / اتصال روتر: ", error_msg);
-           ExpertRemove(); // حذف خودکار اکسپرت
+           ExpertRemove(); 
            return;
        }
        
-       // ۲. بررسی پیام موفقیت‌آمیز اتصال به روتر
        if(StringFind(msg, "\"status\":\"success\"") >= 0) {
            Print("🟢 ", GetJsonString(msg, "message"));
            continue;
        }
        
-       // ۳. پردازش سیگنال‌های معاملاتی
        ProcessSingleSignal(msg);
    }
 }
@@ -129,13 +161,11 @@ void ProcessSingleSignal(string json)
     double signal_sl         = GetJsonDouble(json, "sl");
     double signal_tp         = GetJsonDouble(json, "tp");
 
-    // بررسی تطابق نماد (حتی اگر بروکر پسوند داشته باشد)
     if(StringFind(_Symbol, signal_symbol) < 0) return;
 
-    // --- باز کردن معامله ---
     if(signal_action == "PLACE_PENDING" || signal_action == "OPEN_POSITION")
     {
-        if(FindSlaveTicketByMasterTicket(signal_ticket) > 0) return; // جلوگیری از تکرار
+        if(FindSlaveTicketByMasterTicket(signal_ticket) > 0) return; 
         
         double lot_size = CalculateLotSizeByRisk(signal_price, signal_sl);
         if(lot_size > 0)
@@ -171,7 +201,6 @@ void ProcessSingleSignal(string json)
            }
         }
     }
-    // --- بستن معامله ---
     else if(signal_action == "CLOSE_POSITION" || signal_action == "CANCEL_PENDING")
     {
         ulong slave_ticket = FindSlaveTicketByMasterTicket(signal_ticket);
@@ -197,7 +226,6 @@ double CalculateLotSizeByRisk(double entry_price, double sl_price)
    double risk_amount = AccountInfoDouble(ACCOUNT_BALANCE) * (InpRiskPercent / 100.0);
    double sl_points = MathAbs(entry_price - sl_price) / _Point;
    
-   // اگر حد ضرر صفر بود، یک فاصله ۵۰ پوینتی فرضی برای محاسبه حجم امن در نظر می‌گیریم
    if(sl_points <= 0) sl_points = 50.0;
 
    double tick_value = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
