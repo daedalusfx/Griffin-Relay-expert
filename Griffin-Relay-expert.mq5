@@ -1,10 +1,10 @@
 //+------------------------------------------------------------------+
 //|                                       Griffin-Relay-expert.mq5   |
-//|      V3.1 - Ultra-Fast WebSocket DLL Integration (HFT Ready)     |
+//|      V3.2 - Ultra-Fast WebSocket DLL Integration + Auth Check    |
 //+------------------------------------------------------------------+
 #property copyright "Griffin Quant"
 #property link      "https://github.com/daedalusfx"
-#property version   "3.10"
+#property version   "3.20"
 
 #include <Trade\Trade.mqh>
 
@@ -15,8 +15,9 @@ enum ENUM_CONNECTION_MODE {
 };
 
 // --- ایمپورت توابع DLL ---
-#import "TestRustDll\\griffin_slave_client.dll"
-   void InitializeService(uchar &token[], uchar &url[]); 
+#import "RustDllCopy\\griffin_slave_client.dll"
+   bool CheckLicense(uchar &token[], uchar &api_url[]);        // تابع جدید چک لایسنس
+   void InitializeService(uchar &token[], uchar &url[]);       // راه‌اندازی وب‌سوکت
    void FinalizeService();
    int  GetNextCommand(uchar& buffer[], int buffer_size);
 #import
@@ -24,6 +25,7 @@ enum ENUM_CONNECTION_MODE {
 // --- ورودی‌های اکسپرت ---
 input group "Authentication & Connection"
 input string InpSignalToken    = "PRV-XXXXX"; // توکن سیگنال دریافتی
+input string InpApiUrl         = "http://127.0.0.1:8787"; // آدرس بک‌اند Hono (لوکال یا کلادفلر)
 input ENUM_CONNECTION_MODE InpConnMode = MODE_LOCAL; // نوع اتصال
 input string InpCloudUrl       = "ws://127.0.0.1:8080"; // آدرس سرور ابری (در صورت انتخاب کلود)
 
@@ -73,7 +75,7 @@ int OnInit()
    
    string active_token = InpSignalToken;
 
-   // بررسی کش اگر توکن ورودی خالی یا پیش‌فرض باشد
+   // ۱. مدیریت کش توکن
    if(active_token == "" || active_token == "PRV-XXXXX") {
       active_token = LoadTokenCache();
       if(active_token == "") {
@@ -83,17 +85,27 @@ int OnInit()
          Print("🔄 توکن با موفقیت از حافظه کش فراخوانی شد.");
       }
    } else {
-      // اگر کاربر توکن جدیدی وارد کرده باشد، آن را جایگزین و کش می‌کنیم
       SaveTokenCache(active_token);
       Print("💾 توکن جدید در حافظه کش ذخیره شد.");
    }
 
-   string target_url = (InpConnMode == MODE_LOCAL) ? "ws://127.0.0.1:5151" : InpCloudUrl;
-
    uchar token_bytes[];
-   // مهم: اینجا به جای InpSignalToken از active_token استفاده می‌کنیم
    StringToCharArray(active_token, token_bytes, 0, WHOLE_ARRAY, CP_UTF8);
    
+   uchar api_bytes[];
+   StringToCharArray(InpApiUrl, api_bytes, 0, WHOLE_ARRAY, CP_UTF8);
+
+   // ۲. بررسی مسدودکننده لایسنس قبل از اجرای اکسپرت
+   Print("⏳ در حال بررسی اعتبار لایسنس با سرور...");
+   if(!CheckLicense(token_bytes, api_bytes)) {
+       Print("❌ لایسنس نامعتبر است، منقضی شده، یا سقف دستگاه‌ها پر شده است! اکسپرت روی چارت قرار نمی‌گیرد.");
+       return(INIT_FAILED); // متوقف کردن اتچ شدن اکسپرت
+   }
+   
+   Print("✅ لایسنس تایید شد. در حال اتصال به روتر وب‌سوکت...");
+
+   // ۳. راه‌اندازی اتصال وب‌سوکت
+   string target_url = (InpConnMode == MODE_LOCAL) ? "ws://127.0.0.1:5151" : InpCloudUrl;
    uchar url_bytes[];
    StringToCharArray(target_url, url_bytes, 0, WHOLE_ARRAY, CP_UTF8);
 
