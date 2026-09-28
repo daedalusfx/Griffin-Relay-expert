@@ -228,6 +228,54 @@ void ProcessSingleSignal(string json)
             }
         }
     }
+    // ==========================================
+    // MODIFY_POSITION: آپدیت SL/TP پوزیشن کپی‌شده
+    // ==========================================
+    else if(signal_action == "MODIFY_POSITION")
+    {
+        ulong slave_ticket = FindSlaveTicketByMasterTicket(signal_ticket);
+        if(slave_ticket > 0 && PositionSelectByTicket(slave_ticket))
+        {
+            double new_sl = signal_sl;
+            double new_tp = signal_tp;
+            
+            if(new_sl == 0.0) new_sl = PositionGetDouble(POSITION_SL);
+            if(new_tp == 0.0) new_tp = PositionGetDouble(POSITION_TP);
+            
+            if(MathAbs(new_sl - PositionGetDouble(POSITION_SL)) > _Point * 0.1 ||
+               MathAbs(new_tp - PositionGetDouble(POSITION_TP)) > _Point * 0.1)
+            {
+                if(trade.PositionModify(slave_ticket, new_sl, new_tp))
+                    Print("✏️ Modified Slave #", slave_ticket, " SL=", new_sl, " TP=", new_tp);
+                else
+                    Print("❌ Modify failed for Slave #", slave_ticket, " Error: ", GetLastError());
+            }
+        }
+    }
+    // ==========================================
+    // MODIFY_PENDING: آپدیت قیمت/SL/TP اوردر پندینگ کپی‌شده
+    // ==========================================
+    else if(signal_action == "MODIFY_PENDING")
+    {
+        ulong slave_ticket = FindSlaveTicketByMasterTicket(signal_ticket);
+        if(slave_ticket > 0 && OrderSelect(slave_ticket))
+        {
+            double new_price = signal_price;
+            double new_sl    = signal_sl;
+            double new_tp    = signal_tp;
+            
+            if(new_price == 0.0) new_price = OrderGetDouble(ORDER_PRICE_OPEN);
+            if(new_sl == 0.0)    new_sl    = OrderGetDouble(ORDER_SL);
+            if(new_tp == 0.0)    new_tp    = OrderGetDouble(ORDER_TP);
+            
+            if(trade.OrderModify(slave_ticket, new_price, new_sl, new_tp,
+                                 (ENUM_ORDER_TYPE_TIME)OrderGetInteger(ORDER_TYPE_TIME),
+                                 (datetime)OrderGetInteger(ORDER_TIME_EXPIRATION)))
+                Print("✏️ Modified Pending Slave #", slave_ticket);
+            else
+                Print("❌ Modify Pending failed for Slave #", slave_ticket, " Error: ", GetLastError());
+        }
+    }
 }
 
 //+------------------------------------------------------------------+
