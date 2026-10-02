@@ -197,68 +197,70 @@ void ProcessSingleSignal(string json)
 
     string signal_action     = GetJsonString(json, "action");
     ulong  signal_ticket     = GetJsonUlong(json, "provider_ticket");
-    // string signal_symbol     = GetJsonString(json, "symbol");
+    string raw_symbol        = GetJsonString(json, "symbol");
     int    signal_order_type = (int)GetJsonUlong(json, "order_type");
     double signal_price      = GetJsonDouble(json, "price");
     double signal_sl         = GetJsonDouble(json, "sl");
     double signal_tp         = GetJsonDouble(json, "tp");
 
-    // if(StringFind(_Symbol, signal_symbol) < 0) return;
+    if(raw_symbol == "") return;
 
-
-    string raw_symbol = GetJsonString(json, "symbol");
-    
-    // 🔍 تبدیل نام نماد سیگنال به نام دقیق نماد در بروکر شما
+    // ۱. تبدیل نام خام نماد به نام دقیق آن در بروکر شما (حل مشکل پسوند/پیشوند)
     string signal_symbol = GetBrokerSymbol(raw_symbol);
 
+    // ==========================================
+    // ۲. باز کردن پوزیشن یا ثبت سفارش پندینگ
+    // ==========================================
     if(signal_action == "PLACE_PENDING" || signal_action == "OPEN_POSITION")
     {
+        // جلوگیری از کپی مجدد معامله‌ای که قبلاً باز شده
         if(FindSlaveTicketByMasterTicket(signal_ticket) > 0) return; 
         
-        // ۱. فعال‌سازی نماد در Market Watch
+        // گام ۲.۱: فعال‌سازی نماد در Market Watch
         if(!SymbolSelect(signal_symbol, true))
         {
-            Print("❌ نماد ", signal_symbol, " (پایه: ", raw_symbol, ") در بروکر یافت نشد!");
+            Print("❌ نماد ", signal_symbol, " (پایه: ", raw_symbol, ") در لیست Market Watch بروکر یافت نشد!");
             return;
         }
 
-        // ۲. اطمینان از همگام‌سازی مشخصات نماد (Tick Value و Point)
+        // گام ۲.۲: اطمینان از همگام‌سازی مشخصات نماد (Tick Value و Point)
         int retries = 0;
         while((SymbolInfoDouble(signal_symbol, SYMBOL_TRADE_TICK_VALUE) <= 0 || 
                SymbolInfoDouble(signal_symbol, SYMBOL_POINT) <= 0) && retries < 5)
         {
-            Sleep(50); // مکث کوتاه برای دریافت مشخصات نماد از سرور بروکر
+            Sleep(50); // مکث کوتاه ۵۰ میلی‌ثانیه‌ای جهت دریافت دیتا از سرور
             retries++;
         }
 
-        // ۳. بررسی تیک قیمت
+        // گام ۲.۳: اعتبارسنجی دیتای قیمت لحظه‌ای (MqlTick)
         MqlTick tick;
         if(!SymbolInfoTick(signal_symbol, tick) || tick.ask <= 0 || tick.bid <= 0)
         {
             Sleep(100);
-            SymbolInfoTick(signal_symbol, tick);
+            if(!SymbolInfoTick(signal_symbol, tick) || tick.ask <= 0 || tick.bid <= 0)
+            {
+                Print("❌ امکان دریافت دیتای قیمت لحظه‌ای برای نماد ", signal_symbol, " وجود ندارد.");
+                return;
+            }
         }
 
-        // ۴. محاسبه حجم و ارسال سفارش
+        // گام ۲.۴: محاسبه حجم معامله بر اساس نماد هدف
         double lot_size = CalculateLotSizeByRisk(signal_symbol, signal_price, signal_sl);
-
-
         if(lot_size > 0)
         {
            bool success = false;
-           
            if(signal_action == "PLACE_PENDING") {
-              // ثبت سفارش پندینگ روی signal_symbol
+              // ثبت سفارش پندینگ
               success = trade.OrderOpen(signal_symbol, (ENUM_ORDER_TYPE)signal_order_type, lot_size, 0, signal_price, signal_sl, signal_tp, ORDER_TIME_GTC, 0, "");
            } else {
-              // ثبت معامله مارکت روی signal_symbol
+              // ثبت معامله مارکت
               if((ENUM_POSITION_TYPE)signal_order_type == POSITION_TYPE_BUY)
                  success = trade.Buy(lot_size, signal_symbol, 0, signal_sl, signal_tp);
               else
                  success = trade.Sell(lot_size, signal_symbol, 0, signal_sl, signal_tp);
            }
 
-           // گام ۴: ثبت تیکت‌های مپ‌شده (Master -> Slave)
+           // گام ۲.۵: نگاشت تیکت معامله‌گر اصلی به تیکت حساب شما
            if(success)
            {
                ulong new_slave_ticket = (signal_action == "PLACE_PENDING") ? trade.ResultOrder() : 0;
@@ -281,16 +283,16 @@ void ProcessSingleSignal(string json)
            }
            else
            {
-               Print("❌ خطا در اجرای معامله روی ", signal_symbol, " کد خطا: ", GetLastError());
+               Print("❌ خطا در اجرای معامله روی ", signal_symbol, " | کد خطا: ", GetLastError());
            }
         }
         else
         {
-            Print("❌ محاسبه حجم لایت ناوفق بود (حجم صفر یا پارامترهای نامعتبر).");
+            Print("❌ محاسبه حجم ناوفق بود (حجم صفر یا مشخصات نامعتبر برای ", signal_symbol, ").");
         }
     }
     // ==========================================
-    // ۲. بستن پوزیشن یا لغو سفارش پندینگ
+    // ۳. بستن پوزیشن یا لغو سفارش پندینگ
     // ==========================================
     else if(signal_action == "CLOSE_POSITION" || signal_action == "CANCEL_PENDING")
     {
@@ -308,7 +310,7 @@ void ProcessSingleSignal(string json)
         }
     }
     // ==========================================
-    // ۳. ویرایش SL/TP پوزیشن باز
+    // ۴. ویرایش SL/TP پوزیشن باز
     // ==========================================
     else if(signal_action == "MODIFY_POSITION")
     {
@@ -323,7 +325,7 @@ void ProcessSingleSignal(string json)
             
             double sym_point = SymbolInfoDouble(signal_symbol, SYMBOL_POINT);
             if(sym_point <= 0) sym_point = _Point;
-            
+
             if(MathAbs(new_sl - PositionGetDouble(POSITION_SL)) > sym_point * 0.1 ||
                MathAbs(new_tp - PositionGetDouble(POSITION_TP)) > sym_point * 0.1)
             {
@@ -335,7 +337,7 @@ void ProcessSingleSignal(string json)
         }
     }
     // ==========================================
-    // ۴. ویرایش قیمت/SL/TP سفارش پندینگ
+    // ۵. ویرایش قیمت/SL/TP سفارش پندینگ
     // ==========================================
     else if(signal_action == "MODIFY_PENDING")
     {
@@ -353,13 +355,12 @@ void ProcessSingleSignal(string json)
             if(trade.OrderModify(slave_ticket, new_price, new_sl, new_tp,
                                  (ENUM_ORDER_TYPE_TIME)OrderGetInteger(ORDER_TYPE_TIME),
                                  (datetime)OrderGetInteger(ORDER_TIME_EXPIRATION)))
-                Print("✏️ Modified Pending Slave #", slave_ticket);
+                Print("✏️️ Modified Pending Slave #", slave_ticket);
             else
                 Print("❌ Modify Pending failed for Slave #", slave_ticket, " Error: ", GetLastError());
         }
     }
 }
-
 
 //+------------------------------------------------------------------+
 
