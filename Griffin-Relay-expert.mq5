@@ -155,6 +155,36 @@ void OnTimer()
    }
 }
 
+
+
+
+
+//+------------------------------------------------------------------+
+//| پیدا کردن نام واقعی نماد در بروکر (با احتساب پسوند/پیشوند)        |
+//+------------------------------------------------------------------+
+string GetBrokerSymbol(string raw_symbol)
+{
+    // ۱. اگر نماد با همین نام دقیق وجود داشته باشد
+    if(SymbolInfoInteger(raw_symbol, SYMBOL_EXIST)) return raw_symbol;
+
+    // ۲. جستجو در تمام نمادهای بروکر برای پیدا کردن تشابه (مثلاً پیدا کردن EURUSD.m از روی EURUSD)
+    int total_symbols = SymbolsTotal(false);
+    for(int i = 0; i < total_symbols; i++)
+    {
+        string sym = SymbolName(i, false);
+        if(StringFind(sym, raw_symbol) >= 0)
+        {
+            Print("find this");
+            return sym; // نماد معادل در بروکر پیدا شد
+        }
+    }
+
+    Print("not find");
+ 
+    return raw_symbol; // در صورت عدم پیدا شدن، همان نام اولیه ارجاع داده می‌شود
+}
+
+
 //+------------------------------------------------------------------+
 void ProcessSingleSignal(string json)
 {
@@ -167,38 +197,76 @@ void ProcessSingleSignal(string json)
 
     string signal_action     = GetJsonString(json, "action");
     ulong  signal_ticket     = GetJsonUlong(json, "provider_ticket");
-    string signal_symbol     = GetJsonString(json, "symbol");
+    // string signal_symbol     = GetJsonString(json, "symbol");
     int    signal_order_type = (int)GetJsonUlong(json, "order_type");
     double signal_price      = GetJsonDouble(json, "price");
     double signal_sl         = GetJsonDouble(json, "sl");
     double signal_tp         = GetJsonDouble(json, "tp");
 
-    if(StringFind(_Symbol, signal_symbol) < 0) return;
+    // if(StringFind(_Symbol, signal_symbol) < 0) return;
+
+
+    string raw_symbol = GetJsonString(json, "symbol");
+    
+    // 🔍 تبدیل نام نماد سیگنال به نام دقیق نماد در بروکر شما
+    string signal_symbol = GetBrokerSymbol(raw_symbol);
 
     if(signal_action == "PLACE_PENDING" || signal_action == "OPEN_POSITION")
     {
         if(FindSlaveTicketByMasterTicket(signal_ticket) > 0) return; 
         
-        double lot_size = CalculateLotSizeByRisk(signal_price, signal_sl);
+        // ۱. فعال‌سازی نماد در Market Watch
+        if(!SymbolSelect(signal_symbol, true))
+        {
+            Print("❌ نماد ", signal_symbol, " (پایه: ", raw_symbol, ") در بروکر یافت نشد!");
+            return;
+        }
+
+        // ۲. اطمینان از همگام‌سازی مشخصات نماد (Tick Value و Point)
+        int retries = 0;
+        while((SymbolInfoDouble(signal_symbol, SYMBOL_TRADE_TICK_VALUE) <= 0 || 
+               SymbolInfoDouble(signal_symbol, SYMBOL_POINT) <= 0) && retries < 5)
+        {
+            Sleep(50); // مکث کوتاه برای دریافت مشخصات نماد از سرور بروکر
+            retries++;
+        }
+
+        // ۳. بررسی تیک قیمت
+        MqlTick tick;
+        if(!SymbolInfoTick(signal_symbol, tick) || tick.ask <= 0 || tick.bid <= 0)
+        {
+            Sleep(100);
+            SymbolInfoTick(signal_symbol, tick);
+        }
+
+        // ۴. محاسبه حجم و ارسال سفارش
+        double lot_size = CalculateLotSizeByRisk(signal_symbol, signal_price, signal_sl);
+
+
         if(lot_size > 0)
         {
            bool success = false;
+           
            if(signal_action == "PLACE_PENDING") {
-              success = trade.OrderOpen(_Symbol, (ENUM_ORDER_TYPE)signal_order_type, lot_size, 0, signal_price, signal_sl, signal_tp, ORDER_TIME_GTC, 0, "");
+              // ثبت سفارش پندینگ روی signal_symbol
+              success = trade.OrderOpen(signal_symbol, (ENUM_ORDER_TYPE)signal_order_type, lot_size, 0, signal_price, signal_sl, signal_tp, ORDER_TIME_GTC, 0, "");
            } else {
+              // ثبت معامله مارکت روی signal_symbol
               if((ENUM_POSITION_TYPE)signal_order_type == POSITION_TYPE_BUY)
-                 success = trade.Buy(lot_size, _Symbol, 0, signal_sl, signal_tp);
+                 success = trade.Buy(lot_size, signal_symbol, 0, signal_sl, signal_tp);
               else
-                 success = trade.Sell(lot_size, _Symbol, 0, signal_sl, signal_tp);
+                 success = trade.Sell(lot_size, signal_symbol, 0, signal_sl, signal_tp);
            }
 
+           // گام ۴: ثبت تیکت‌های مپ‌شده (Master -> Slave)
            if(success)
            {
                ulong new_slave_ticket = (signal_action == "PLACE_PENDING") ? trade.ResultOrder() : 0;
                if(new_slave_ticket == 0)
                {
                    ulong deal_ticket = trade.ResultDeal();
-                   if(HistoryDealSelect(deal_ticket)) new_slave_ticket = HistoryDealGetInteger(deal_ticket, DEAL_POSITION_ID);
+                   if(HistoryDealSelect(deal_ticket)) 
+                       new_slave_ticket = HistoryDealGetInteger(deal_ticket, DEAL_POSITION_ID);
                }
            
                if(new_slave_ticket > 0)
@@ -207,12 +275,23 @@ void ProcessSingleSignal(string json)
                    ArrayResize(g_master_tickets, size + 1);
                    ArrayResize(g_slave_tickets, size + 1);
                    g_master_tickets[size] = signal_ticket;
-                   g_slave_tickets[size] = new_slave_ticket;
-                   Print("✅ Copied: Master #", signal_ticket, " -> Slave #", new_slave_ticket);
+                   g_slave_tickets[size]  = new_slave_ticket;
+                   Print("✅ Copied: Master #", signal_ticket, " -> Slave #", new_slave_ticket, " (", signal_symbol, ")");
                }
            }
+           else
+           {
+               Print("❌ خطا در اجرای معامله روی ", signal_symbol, " کد خطا: ", GetLastError());
+           }
+        }
+        else
+        {
+            Print("❌ محاسبه حجم لایت ناوفق بود (حجم صفر یا پارامترهای نامعتبر).");
         }
     }
+    // ==========================================
+    // ۲. بستن پوزیشن یا لغو سفارش پندینگ
+    // ==========================================
     else if(signal_action == "CLOSE_POSITION" || signal_action == "CANCEL_PENDING")
     {
         ulong slave_ticket = FindSlaveTicketByMasterTicket(signal_ticket);
@@ -229,7 +308,7 @@ void ProcessSingleSignal(string json)
         }
     }
     // ==========================================
-    // MODIFY_POSITION: آپدیت SL/TP پوزیشن کپی‌شده
+    // ۳. ویرایش SL/TP پوزیشن باز
     // ==========================================
     else if(signal_action == "MODIFY_POSITION")
     {
@@ -242,8 +321,11 @@ void ProcessSingleSignal(string json)
             if(new_sl == 0.0) new_sl = PositionGetDouble(POSITION_SL);
             if(new_tp == 0.0) new_tp = PositionGetDouble(POSITION_TP);
             
-            if(MathAbs(new_sl - PositionGetDouble(POSITION_SL)) > _Point * 0.1 ||
-               MathAbs(new_tp - PositionGetDouble(POSITION_TP)) > _Point * 0.1)
+            double sym_point = SymbolInfoDouble(signal_symbol, SYMBOL_POINT);
+            if(sym_point <= 0) sym_point = _Point;
+            
+            if(MathAbs(new_sl - PositionGetDouble(POSITION_SL)) > sym_point * 0.1 ||
+               MathAbs(new_tp - PositionGetDouble(POSITION_TP)) > sym_point * 0.1)
             {
                 if(trade.PositionModify(slave_ticket, new_sl, new_tp))
                     Print("✏️ Modified Slave #", slave_ticket, " SL=", new_sl, " TP=", new_tp);
@@ -253,7 +335,7 @@ void ProcessSingleSignal(string json)
         }
     }
     // ==========================================
-    // MODIFY_PENDING: آپدیت قیمت/SL/TP اوردر پندینگ کپی‌شده
+    // ۴. ویرایش قیمت/SL/TP سفارش پندینگ
     // ==========================================
     else if(signal_action == "MODIFY_PENDING")
     {
@@ -278,25 +360,36 @@ void ProcessSingleSignal(string json)
     }
 }
 
+
 //+------------------------------------------------------------------+
-double CalculateLotSizeByRisk(double entry_price, double sl_price)
+
+double CalculateLotSizeByRisk(string symbol, double entry_price, double sl_price)
+
 {
    if(InpRiskPercent <= 0) return 0.0;
    
+   double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+   if(point <= 0) point = 0.00001;
+
    double risk_amount = AccountInfoDouble(ACCOUNT_BALANCE) * (InpRiskPercent / 100.0);
-   double sl_points = MathAbs(entry_price - sl_price) / _Point;
+   double sl_points = MathAbs(entry_price - sl_price) / point;
    
    if(sl_points <= 0) sl_points = 50.0;
 
-   double tick_value = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
-   double tick_size = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+   double tick_value = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
+   double tick_size = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
    if(tick_size <= 0) return 0.0;
    
-   double lot_size = (risk_amount / sl_points) / (tick_value / tick_size * _Point);
-   double volume_step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   double lot_size = (risk_amount / sl_points) / (tick_value / tick_size * point);
+   double volume_step = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
+   if(volume_step <= 0) volume_step = 0.01;
+
    lot_size = MathFloor(lot_size / volume_step) * volume_step;
    
-   return NormalizeDouble(fmax(SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN), fmin(lot_size, SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX))), 2);
+   double min_vol = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
+   double max_vol = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
+
+   return NormalizeDouble(fmax(min_vol, fmin(lot_size, max_vol)), 2);
 }
 
 //+------------------------------------------------------------------+
